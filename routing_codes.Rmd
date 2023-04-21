@@ -1,0 +1,535 @@
+---
+title: "GGRC32_project"
+author: "Zehui Yin"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Setup
+
+```{r setup}
+library(tidyverse)
+library(jsonlite)
+library(arrow)
+library(sf)
+library(sp)
+library(mapview)
+library(sfheaders)
+library(stringr)
+Sys.setenv(JAVA_HOME="C:\\Program Files\\Java\\jdk-11.0.17")
+library(r5r)
+```
+
+Read and combine trips data
+
+```{r}
+trips1 <- read.csv("./Data/Bike share ridership 2021-01.csv")
+trips2 <- read.csv("./Data/Bike share ridership 2021-02.csv")
+trips3 <- read.csv("./Data/Bike share ridership 2021-03.csv")
+trips4 <- read.csv("./Data/Bike share ridership 2021-04.csv")
+trips5 <- read.csv("./Data/Bike share ridership 2021-05.csv")
+trips6 <- read.csv("./Data/Bike share ridership 2021-06.csv")
+trips7 <- read.csv("./Data/Bike share ridership 2021-07.csv")
+trips8 <- read.csv("./Data/Bike share ridership 2021-08.csv")
+trips9 <- read.csv("./Data/Bike share ridership 2021-09.csv")
+trips10 <- read.csv("./Data/Bike share ridership 2021-10.csv")
+trips11 <- read.csv("./Data/Bike share ridership 2021-11.csv")
+trips12 <- read.csv("./Data/Bike share ridership 2021-12.csv")
+trips <- rbind(trips1, trips2, trips3, trips4, trips5, trips6, trips7, trips8, trips9, trips10, trips11, trips12)
+trips$Start.Time <- as.POSIXct(trips$Start.Time, "%m/%d/%Y %H:%M", tz = "America/Toronto")
+trips$End.Time <- as.POSIXct(trips$End.Time, "%m/%d/%Y %H:%M", tz = "America/Toronto")
+
+write_parquet(trips, "./Data/trips.parquet")
+trips <- read_parquet("./Data/trips.parquet") # only run this line is fine
+```
+
+Read and process station data
+
+```{r}
+stations <- read_json("./Data/station_information.json")
+stations <- stations$data
+stations <- stations$stations
+stations_df <- as.data.frame(matrix(nrow = length(stations), ncol = 14))
+colnames(stations_df) <- c("station_id", "name", "physical_configuration",
+                           "lat", "lon", "altitude", "address", "capacity",
+                           "is_charging_station", "rental_methods", "groups",
+                           "obcn", "nearby_distance", "ride_code_support")
+for (i in 1:length(stations)) {
+  holder <- as.data.frame(unlist(stations[i]))
+  stations_df[i, "station_id"] <- holder["station_id",]
+  stations_df[i, "name"] <- holder["name",]
+  stations_df[i, "physical_configuration"] <- holder["physical_configuration",]
+  stations_df[i, "lat"] <- holder["lat",]
+  stations_df[i, "lon"] <- holder["lon",]
+  stations_df[i, "altitude"] <- holder["altitude",]
+  stations_df[i, "address"] <- holder["address",]
+  stations_df[i, "capacity"] <- holder["capacity",]
+  stations_df[i, "is_charging_station"] <- holder["is_charging_station",]
+  stations_df[i, "rental_methods"] <- paste(holder[str_which(row.names(holder), coll("rental_methods", ignore_case = FALSE, locale = "en")),], collapse = ",")
+  stations_df[i, "groups"] <- holder["groups",]
+  stations_df[i, "obcn"] <- holder["obcn",]
+  stations_df[i, "nearby_distance"] <- holder["nearby_distance",]
+  stations_df[i, "ride_code_support"] <- holder["_ride_code_support",]
+}
+
+write_parquet(stations_df, "./Data/stations.parquet")
+stations_df <- read_parquet("./Data/stations.parquet") # only run this line is fine
+```
+
+Routing setup
+
+```{r}
+options(java.parameters = "-Xmx12G")
+r5r_core <- setup_r5(data_path = "./Network", verbose = F)
+```
+
+# Travel time matrix between all possible combinations of stations
+
+```{r}
+stations <- stations_df[, c("station_id", "lat", "lon")]
+stations <- st_as_sf(stations, coords = c("lon", "lat"), crs = 4326, agr = "constant")
+# mapview(stations)
+
+origins <- stations[stations$station_id %in% unique(trips$Start.Station.Id),]
+names(origins)[1] <- "id"
+destinations <- stations[stations$station_id %in% unique(trips$End.Station.Id),]
+names(destinations)[1] <- "id"
+
+mode <- "BICYCLE"
+max_walk_dist <- 1000L
+max_trip_duration <- 1000L
+bike_speed <- 12L
+max_lts <- 1L
+departure_datetime <- as.POSIXct("1-1-2023 14:00:00", tz = "America/Toronto",
+                                 format = "%d-%m-%Y %H:%M:%S")
+
+# Safest
+max_lts <- 1L
+ttm_lts1 <- travel_time_matrix(r5r_core = r5r_core,
+                          origins = origins,
+                          destinations = destinations,
+                          mode = mode,
+                          departure_datetime = departure_datetime,
+                          max_walk_dist = max_walk_dist,
+                          max_trip_duration = max_trip_duration,
+                          bike_speed = bike_speed,
+                          max_lts = max_lts,
+                          verbose = FALSE)
+
+# normal
+max_lts <- 2L
+ttm_lts2 <- travel_time_matrix(r5r_core = r5r_core,
+                          origins = origins,
+                          destinations = destinations,
+                          mode = mode,
+                          departure_datetime = departure_datetime,
+                          max_walk_dist = max_walk_dist,
+                          max_trip_duration = max_trip_duration,
+                          bike_speed = bike_speed,
+                          max_lts = max_lts,
+                          verbose = FALSE)
+
+# danger
+max_lts <- 3L
+ttm_lts3 <- travel_time_matrix(r5r_core = r5r_core,
+                          origins = origins,
+                          destinations = destinations,
+                          mode = mode,
+                          departure_datetime = departure_datetime,
+                          max_walk_dist = max_walk_dist,
+                          max_trip_duration = max_trip_duration,
+                          bike_speed = bike_speed,
+                          max_lts = max_lts,
+                          verbose = FALSE)
+
+# dangerest
+max_lts <- 4L
+ttm_lts4 <- travel_time_matrix(r5r_core = r5r_core,
+                          origins = origins,
+                          destinations = destinations,
+                          mode = mode,
+                          departure_datetime = departure_datetime,
+                          max_walk_dist = max_walk_dist,
+                          max_trip_duration = max_trip_duration,
+                          bike_speed = bike_speed,
+                          max_lts = max_lts,
+                          verbose = FALSE)
+```
+
+Visualize the travel time distribution
+
+```{r}
+par(mfrow = c(2,2))
+hist(ttm_lts1$travel_time, breaks = seq(0, max(ttm_lts1$travel_time) + 10, 10), ylim = c(0, 70000))
+hist(ttm_lts2$travel_time, breaks = seq(0, max(ttm_lts1$travel_time) + 10, 10), ylim = c(0, 70000))
+hist(ttm_lts3$travel_time, breaks = seq(0, max(ttm_lts1$travel_time) + 10, 10), ylim = c(0, 70000))
+hist(ttm_lts4$travel_time, breaks = seq(0, max(ttm_lts1$travel_time) + 10, 10), ylim = c(0, 70000))
+```
+
+## Connectivity at stations
+
+Reweighting based on trip count at actual origin and destination
+Assignment more weights to OD pairs occurs more in the dataset
+
+$$C_i = \frac{\sum_{j=1}^Nn_{ij}*t_{ij}}{\sum_{j=1}^Nn_{ij}}$$
+
+Where:
++ $C_i$ is the connectivity score or total travel time originated from $i^{th}$ station in 2021
++ $N$ is the total number of stations
++ $n_{ij}$ is the total number of trips originated from $i^{th}$ station to $j^{th}$ station
++ $t_{ij}$ is the travel time from $i^{th}$ station to $j^{th}$ station
+
+```{r}
+stations_connectivity <- origins
+stations_connectivity <- as.data.frame(stations_connectivity)
+stations_connectivity$connectivity_lts1 <- NA
+stations_connectivity$connectivity_lts2 <- NA
+stations_connectivity$connectivity_lts3 <- NA
+stations_connectivity$connectivity_lts4 <- NA
+
+# extreme long time to process
+#N <- nrow(stations_connectivity)
+#for (i in 1:N) {
+#  denominator <- 
+#    nrow(trips[which(trips$Start.Station.Id == stations_connectivity$id[i]),])
+#  numerator <- 0
+#  for (j in 1:N) {
+#    numerator <- numerator +
+#      nrow(trips[which(trips$Start.Station.Id == stations_connectivity$id[i] & 
+#                       trips$End.Station.Id == stations_connectivity$id[j]),]) *
+#      ttm_lts1[which(ttm_lts1$fromId == stations_connectivity$id[i] & 
+#                     ttm_lts1$toId == stations_connectivity$id[j]),
+#               "travel_time"]
+#  }
+#}
+
+# improve code efficiency
+#N <- nrow(stations_connectivity)
+#for (i in 1:N) {
+#  trips_i <- 
+#    trips[which(trips$Start.Station.Id == stations_connectivity$id[i]),]
+#  denominator <- nrow(trips_i)
+#  ttm_lts1_i <- 
+#    ttm_lts1[which(ttm_lts1$fromId == stations_connectivity$id[i]),] 
+#  numerator <- 0
+#  for (j in 1:N) {
+#    toid <- stations_connectivity$id[j]
+#    numerator <- numerator +
+#      nrow(trips_i[which(trips_i$End.Station.Id == toid),]) *
+#      ttm_lts1_i[which(ttm_lts1_i$toId == toid), "travel_time"]
+#  }
+#}
+
+# not working for some reasons
+connectivity <- function(trips, ttm, output) {
+  N <- nrow(output)
+  total_loop_number <- N*N
+  for (i in 1:N) {
+    trips_i <- 
+      trips[which(trips$Start.Station.Id == output$id[i]),]
+    denominator <- nrow(trips_i)
+    ttm_i <- 
+      ttm[which(ttm$fromId == output$id[i]),]
+    numerator <- 0
+    for (j in 1:N) {
+      toid <- output$id[j]
+      numerator <- numerator +
+        nrow(trips_i[which(trips_i$End.Station.Id == toid),]) *
+        ttm_i[which(ttm_i$toId == toid), "travel_time"]
+    }
+    output[i, paste("connectivity", substr(deparse(quote(ttm)),4,8))] <-
+      numerator/denominator
+    cat("Process completed", i*N/total_loop_number*100, "%\n")
+  }
+}
+
+connectivity(trips, ttm_lts1, stations_connectivity)
+```
+
+# Shortest path between each stations
+
+```{r}
+stations <- stations_df[, c("name", "lat", "lon")]
+stations <- st_as_sf(stations, coords = c("lon", "lat"), crs = 4326, agr = "constant")
+# mapview(stations)
+
+origins <- stations[stations$name %in% unique(trips$Start.Station.Name),]
+names(origins)[1] <- "id"
+origins <- origins[rep(seq_len(nrow(origins)), each = 577), ]
+
+destinations <- stations[stations$name %in% unique(trips$End.Station.Name),]
+names(destinations)[1] <- "id"
+destinations <- destinations[rep(1:577, 577), ]
+
+mode <- "BICYCLE"
+max_walk_dist <- 1000L
+max_trip_duration <- 1000L
+bike_speed <- 12L
+max_lts <- 2L
+departure_datetime <- as.POSIXct("1-4-2021 14:00:00", tz = "America/Toronto",
+                                 format = "%d-%m-%Y %H:%M:%S")
+
+routes <- detailed_itineraries(r5r_core = r5r_core,
+                          origins = origins,
+                          destinations = destinations,
+                          mode = mode,
+                          departure_datetime = departure_datetime,
+                          max_walk_dist = max_walk_dist,
+                          max_trip_duration = max_trip_duration,
+                          bike_speed = bike_speed,
+                          max_lts = max_lts,
+                          verbose = FALSE)
+
+# remove start and end at the same place
+routes <- routes[which(routes$fromId != routes$toId),]
+```
+
+## How fast does riders travel within the Toronto Bikeshare System at stations level (also seasonal variation)
+
+```{r}
+stations_used <- 
+  stations_df[stations_df$name %in% unique(trips$Start.Station.Name) | 
+             stations_df$name %in% unique(trips$End.Station.Name), ]
+
+trips <- trips[trips$Start.Station.Name %in% stations_used$name & 
+                 trips$End.Station.Name %in% stations_used$name,]
+
+# summary(as.factor(months(trips$Start.Time)))
+trips_spring <- trips[months(trips$Start.Time) %in% c("March", "April", "May"),] # 805719
+trips_summer <- trips[months(trips$Start.Time) %in% c("June", "July", "August"),] # 1413500
+trips_autumn <- trips[months(trips$Start.Time) %in% c("September", "October", "November"),] # 1064864
+trips_winter <- trips[months(trips$Start.Time) %in% c("December", "January", "February"),] # 291099
+```
+
+$$S_i = \frac{\sum_{j=1}^{M-1}n_{ij}*d_{ij}}{\sum_{z=1}^{N_i}t_{iz}}$$
+
+where:
++ $S_i$: mean travel speed of trips originated from $i^{th}$ station (m/s)
++ $M$: number of total stations
++ $N_i$: total number of trips originated from $i^{th}$ station
++ $n_{ij}$: number of trips originated from $i^{th}$ station to $j^{th}$ station
++ $d_{ij}$: distance travelled from $i^{th}$ station to $j^{th}$ station
++ $t_{iz}$: time it took by $z^{th}$ trip to travel from $i^{th}$ station
+
+note: trips start and end at the same station are omitted in the calculation
+
+```{r}
+routes_df <- as.data.frame(routes)
+
+# all seasons
+for (i in stations_used$name) {
+  trips_starts_at_i <- 
+    trips[which(trips$Start.Station.Name == i & trips$End.Station.Name != i), ]
+  total_time <- sum(as.numeric(trips_starts_at_i[, "Trip..Duration"]))
+  distance_matrix <- 
+    routes_df[which(routes_df$fromId == i), c("toId", "distance")]
+  total_distance <- 0
+  for (j in distance_matrix$toId) {
+    total_distance <- total_distance +
+      nrow(trips_starts_at_i[trips_starts_at_i$End.Station.Name == j,]) *
+      distance_matrix[distance_matrix$toId == j, "distance"]
+  }
+  stations_used[stations_used$name == i, "all_mean_speed_ms"] <-
+    total_distance/total_time
+}
+stations_used$all_mean_speed_kmh <- stations_used$all_mean_speed_ms * 3.6
+
+# spring
+for (i in stations_used$name) {
+  trips_starts_at_i <- 
+    trips_spring[which(trips_spring$Start.Station.Name == i & trips_spring$End.Station.Name != i), ]
+  total_time <- sum(as.numeric(trips_starts_at_i[, "Trip..Duration"]))
+  distance_matrix <- 
+    routes_df[which(routes_df$fromId == i), c("toId", "distance")]
+  total_distance <- 0
+  for (j in distance_matrix$toId) {
+    total_distance <- total_distance +
+      nrow(trips_starts_at_i[trips_starts_at_i$End.Station.Name == j,]) *
+      distance_matrix[distance_matrix$toId == j, "distance"]
+  }
+  stations_used[stations_used$name == i, "spring_mean_speed_ms"] <-
+    total_distance/total_time
+}
+stations_used$spring_mean_speed_kmh <- stations_used$spring_mean_speed_ms * 3.6
+
+# summer
+for (i in stations_used$name) {
+  trips_starts_at_i <- 
+    trips_summer[which(trips_summer$Start.Station.Name == i & trips_summer$End.Station.Name != i), ]
+  total_time <- sum(as.numeric(trips_starts_at_i[, "Trip..Duration"]))
+  distance_matrix <- 
+    routes_df[which(routes_df$fromId == i), c("toId", "distance")]
+  total_distance <- 0
+  for (j in distance_matrix$toId) {
+    total_distance <- total_distance +
+      nrow(trips_starts_at_i[trips_starts_at_i$End.Station.Name == j,]) *
+      distance_matrix[distance_matrix$toId == j, "distance"]
+  }
+  stations_used[stations_used$name == i, "summer_mean_speed_ms"] <-
+    total_distance/total_time
+}
+stations_used$summer_mean_speed_kmh <- stations_used$summer_mean_speed_ms * 3.6
+
+# autumn
+for (i in stations_used$name) {
+  trips_starts_at_i <- 
+    trips_autumn[which(trips_autumn$Start.Station.Name == i & trips_autumn$End.Station.Name != i), ]
+  total_time <- sum(as.numeric(trips_starts_at_i[, "Trip..Duration"]))
+  distance_matrix <- 
+    routes_df[which(routes_df$fromId == i), c("toId", "distance")]
+  total_distance <- 0
+  for (j in distance_matrix$toId) {
+    total_distance <- total_distance +
+      nrow(trips_starts_at_i[trips_starts_at_i$End.Station.Name == j,]) *
+      distance_matrix[distance_matrix$toId == j, "distance"]
+  }
+  stations_used[stations_used$name == i, "autumn_mean_speed_ms"] <-
+    total_distance/total_time
+}
+stations_used$autumn_mean_speed_kmh <- stations_used$autumn_mean_speed_ms * 3.6
+
+# winter
+for (i in stations_used$name) {
+  trips_starts_at_i <- 
+    trips_winter[which(trips_winter$Start.Station.Name == i & trips_winter$End.Station.Name != i), ]
+  total_time <- sum(as.numeric(trips_starts_at_i[, "Trip..Duration"]))
+  distance_matrix <- 
+    routes_df[which(routes_df$fromId == i), c("toId", "distance")]
+  total_distance <- 0
+  for (j in distance_matrix$toId) {
+    total_distance <- total_distance +
+      nrow(trips_starts_at_i[trips_starts_at_i$End.Station.Name == j,]) *
+      distance_matrix[distance_matrix$toId == j, "distance"]
+  }
+  stations_used[stations_used$name == i, "winter_mean_speed_ms"] <-
+    total_distance/total_time
+}
+stations_used$winter_mean_speed_kmh <- stations_used$winter_mean_speed_ms * 3.6
+
+stations_used$seasonal_variation <- sqrt(((stations_used$spring_mean_speed_kmh - stations_used$all_mean_speed_kmh)^2 +
+                                       (stations_used$summer_mean_speed_kmh - stations_used$all_mean_speed_kmh)^2 +
+                                       (stations_used$autumn_mean_speed_kmh - stations_used$all_mean_speed_kmh)^2 +
+                                       (stations_used$winter_mean_speed_kmh - stations_used$all_mean_speed_kmh)^2)/4)/stations_used$all_mean_speed_kmh
+
+stations_used <- st_as_sf(stations_used,  coords = c("lon", "lat"), crs = 4326, agr = "constant")
+
+library(arcgisbinding)
+arc.check_product()
+arc.write("./GGRC32_visualization/GGRC32_visualization.gdb/station_speed",
+          stations_used, overwrite = TRUE)
+```
+
+## How existing bike lines compliments the Toronto Bike Share System?
+
+```{r}
+for (i in unique(routes_df$fromId)) {
+  trips_starts_at_i <- trips[which(trips$Start.Station.Name == i), ]
+  routes_starts_at_i <- routes_df$fromId == i
+  for (j in unique(routes_df$toId)) {
+    routes_df[routes_starts_at_i & routes_df$toId == j, "n"] <- 
+      nrow(trips_starts_at_i[trips_starts_at_i$End.Station.Name == j,])
+  }
+  cat("process iterated", i, "\n")
+}
+
+# store routes that have been used
+routes_used_df <- routes_df[routes_df$n > 0,]
+```
+
+Adding overlapping routes on top of each other
+
+note: trips start and end at the same station are omitted in the overlay (no route)
+
+```{r}
+routes_used <- st_as_sf(routes_used_df, sf_column_name = "geometry")
+
+library(stplanr)
+overlay_routes <- overline(sl = routes_used,
+                           attrib = "n",
+                           ncores = 8)
+
+library(arcgisbinding)
+arc.check_product()
+arc.write("./GGRC32_visualization/GGRC32_visualization.gdb/overlay_routes1",
+          overlay_routes, overwrite = TRUE)
+```
+
+## Some descriptive statistics
+
+```{r}
+nrow(trips[trips$Start.Station.Name != trips$End.Station.Name,])
+nrow(trips_spring[trips_spring$Start.Station.Name != trips_spring$End.Station.Name,])
+nrow(trips_summer[trips_summer$Start.Station.Name != trips_summer$End.Station.Name,])
+nrow(trips_autumn[trips_autumn$Start.Station.Name != trips_autumn$End.Station.Name,])
+nrow(trips_winter[trips_winter$Start.Station.Name != trips_winter$End.Station.Name,])
+
+mean(trips[trips$Start.Station.Name != trips$End.Station.Name, "Trip..Duration"])
+median(trips[trips$Start.Station.Name != trips$End.Station.Name, "Trip..Duration"])
+IQR(trips[trips$Start.Station.Name != trips$End.Station.Name, "Trip..Duration"])
+
+mean(trips_spring[trips_spring$Start.Station.Name != trips_spring$End.Station.Name, "Trip..Duration"])
+median(trips_spring[trips_spring$Start.Station.Name != trips_spring$End.Station.Name, "Trip..Duration"])
+IQR(trips_spring[trips_spring$Start.Station.Name != trips_spring$End.Station.Name, "Trip..Duration"])
+
+mean(trips_summer[trips_summer$Start.Station.Name != trips_summer$End.Station.Name, "Trip..Duration"])
+median(trips_summer[trips_summer$Start.Station.Name != trips_summer$End.Station.Name, "Trip..Duration"])
+IQR(trips_summer[trips_summer$Start.Station.Name != trips_summer$End.Station.Name, "Trip..Duration"])
+
+mean(trips_autumn[trips_autumn$Start.Station.Name != trips_autumn$End.Station.Name, "Trip..Duration"])
+median(trips_autumn[trips_autumn$Start.Station.Name != trips_autumn$End.Station.Name, "Trip..Duration"])
+IQR(trips_autumn[trips_autumn$Start.Station.Name != trips_autumn$End.Station.Name, "Trip..Duration"])
+
+mean(trips_winter[trips_winter$Start.Station.Name != trips_winter$End.Station.Name, "Trip..Duration"])
+median(trips_winter[trips_winter$Start.Station.Name != trips_winter$End.Station.Name, "Trip..Duration"])
+IQR(trips_winter[trips_winter$Start.Station.Name != trips_winter$End.Station.Name, "Trip..Duration"])
+```
+
+```{r}
+nrow(stations_used[!is.nan(stations_used$spring_mean_speed_kmh),])
+nrow(stations_used[!is.nan(stations_used$summer_mean_speed_kmh),])
+nrow(stations_used[!is.nan(stations_used$autumn_mean_speed_kmh),])
+nrow(stations_used[!is.nan(stations_used$winter_mean_speed_kmh),])
+
+mean(stations_used$all_mean_speed_kmh)
+median(stations_used$all_mean_speed_kmh)
+IQR(stations_used$all_mean_speed_kmh)
+
+mean(stations_used$spring_mean_speed_kmh, na.rm = TRUE)
+median(stations_used$spring_mean_speed_kmh, na.rm = TRUE)
+IQR(stations_used$spring_mean_speed_kmh, na.rm = TRUE)
+
+mean(stations_used$summer_mean_speed_kmh, na.rm = TRUE)
+median(stations_used$summer_mean_speed_kmh, na.rm = TRUE)
+IQR(stations_used$summer_mean_speed_kmh, na.rm = TRUE)
+
+mean(stations_used$autumn_mean_speed_kmh, na.rm = TRUE)
+median(stations_used$autumn_mean_speed_kmh, na.rm = TRUE)
+IQR(stations_used$autumn_mean_speed_kmh, na.rm = TRUE)
+
+mean(stations_used$winter_mean_speed_kmh, na.rm = TRUE)
+median(stations_used$winter_mean_speed_kmh, na.rm = TRUE)
+IQR(stations_used$winter_mean_speed_kmh, na.rm = TRUE)
+
+mean(stations_used$seasonal_variation, na.rm = TRUE)
+median(stations_used$seasonal_variation, na.rm = TRUE)
+IQR(stations_used$seasonal_variation, na.rm = TRUE)
+```
+
+```{r}
+nrow(routes_df)
+mean(routes_df$distance)
+median(routes_df$distance)
+IQR(routes_df$distance)
+
+nrow(routes_used_df)
+mean(routes_used_df$distance)
+median(routes_used_df$distance)
+IQR(routes_used_df$distance)
+```
+
+```{r}
+nrow(overlay_routes)
+mean(overlay_routes$n)
+median(overlay_routes$n)
+IQR(overlay_routes$n)
+```
