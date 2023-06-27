@@ -4,4 +4,4 @@ This project was a part of [GGRC32](https://utsc.calendar.utoronto.ca/course/ggr
 -	RQ1. What are the travel speeds of cyclists in the Bikeshare Toronto System?
 -	RQ2. To what extent do the existing bike lanes complement the Bikeshare Toronto System?
 
-You can find the source code in the Rmarkdown(Rmd) file and a complete analysis report in the pdf file in this directory. Also, there is an interactive results visualization hosted [here](https://zehuiyin.github.io/Toronto_Bike_Share_Web_Map/).
+You can find the source code in the Rmarkdown(Rmd) file and a complete analysis report in the pdf file in this directory. Also, there is an interactive results visualization hosted [here](https://zehuiyin.github.io/toronto_bike_share_web_map/).
